@@ -14,10 +14,22 @@ enum class T6615Command : uint8_t {
   GET_SERIAL,
   GET_VERSION,
   GET_ELEVATION,
+  GET_STATUS,
   GET_ABC,
   ENABLE_ABC,
   DISABLE_ABC,
   SET_ELEVATION,
+};
+
+// Status byte bits returned by GET_STATUS (0xB6) per the Telaire T6615 datasheet.
+// A non-zero bit indicates the named condition is currently active.
+enum T6615StatusBit : uint8_t {
+  T6615_STATUS_ERROR = 0x01,         // sensor reports a fault condition
+  T6615_STATUS_WARMUP = 0x02,        // sensor still warming up (CO2 reads are not valid)
+  T6615_STATUS_CALIBRATION = 0x04,   // calibration in progress
+  T6615_STATUS_IDLE = 0x08,          // sensor idle (no active measurement)
+  T6615_STATUS_SELF_TEST = 0x10,     // self-test pending / in progress
+  T6615_STATUS_SERVICE_MODE = 0x40,  // service mode active
 };
 
 class T6615Component : public PollingComponent, public uart::UARTDevice {
@@ -27,15 +39,37 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   void dump_config() override;
 
   void set_co2_sensor(sensor::Sensor *co2_sensor) { this->co2_sensor_ = co2_sensor; }
+  void set_status_sensor(sensor::Sensor *s) { this->status_sensor_ = s; }
+  void set_error_sensor(sensor::Sensor *s) { this->error_sensor_ = s; }
+  void set_warmup_sensor(sensor::Sensor *s) { this->warmup_sensor_ = s; }
+  void set_calibration_sensor(sensor::Sensor *s) { this->calibration_sensor_ = s; }
+  void set_idle_sensor(sensor::Sensor *s) { this->idle_sensor_ = s; }
+  void set_self_test_sensor(sensor::Sensor *s) { this->self_test_sensor_ = s; }
+  void set_service_mode_sensor(sensor::Sensor *s) { this->service_mode_sensor_ = s; }
+  void set_elevation_sensor(sensor::Sensor *s) { this->elevation_sensor_ = s; }
 
  protected:
-  void query_ppm_();
   void send_ppm_command_();
+  void send_status_command_();
+  void send_elevation_command_();
+  void send_serial_command_();
+  void send_version_command_();
+
+  void publish_status_(uint8_t status);
 
   T6615Command command_ = T6615Command::NONE;
   uint32_t command_time_ = 0;
+  uint8_t query_index_ = 0;
 
   sensor::Sensor *co2_sensor_{nullptr};
+  sensor::Sensor *status_sensor_{nullptr};
+  sensor::Sensor *error_sensor_{nullptr};
+  sensor::Sensor *warmup_sensor_{nullptr};
+  sensor::Sensor *calibration_sensor_{nullptr};
+  sensor::Sensor *idle_sensor_{nullptr};
+  sensor::Sensor *self_test_sensor_{nullptr};
+  sensor::Sensor *service_mode_sensor_{nullptr};
+  sensor::Sensor *elevation_sensor_{nullptr};
 };
 
 }  // namespace t6615
