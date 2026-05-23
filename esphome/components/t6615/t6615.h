@@ -19,6 +19,7 @@ enum class T6615Command : uint8_t {
   ENABLE_ABC,
   DISABLE_ABC,
   SET_ELEVATION,
+  CALIBRATE,
 };
 
 // Status byte bits returned by GET_STATUS (0xB6) per the Telaire T6615 datasheet.
@@ -37,6 +38,10 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   void loop() override;
   void update() override;
   void dump_config() override;
+
+  // Trigger a single-point calibration. The sensor will treat the currently sampled gas as having
+  // the provided ppm value (typical use: place sensor in fresh outdoor air and call with 400).
+  void calibrate(uint16_t target_ppm);
 
   void set_co2_sensor(sensor::Sensor *co2_sensor) { this->co2_sensor_ = co2_sensor; }
   void set_status_sensor(sensor::Sensor *s) { this->status_sensor_ = s; }
@@ -70,6 +75,13 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   sensor::Sensor *self_test_sensor_{nullptr};
   sensor::Sensor *service_mode_sensor_{nullptr};
   sensor::Sensor *elevation_sensor_{nullptr};
+};
+
+template<typename... Ts> class T6615CalibrateAction : public Action<Ts...>, public Parented<T6615Component> {
+ public:
+  TEMPLATABLE_VALUE(uint16_t, target_ppm)
+
+  void play(const Ts &...x) override { this->parent_->calibrate(this->target_ppm_.value(x...)); }
 };
 
 }  // namespace t6615

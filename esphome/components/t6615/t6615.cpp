@@ -20,6 +20,8 @@ static const uint8_t T6615_COMMAND_GET_ABC[] = {0xB7, 0x00};
 static const uint8_t T6615_COMMAND_ENABLE_ABC[] = {0xB7, 0x01};
 static const uint8_t T6615_COMMAND_DISABLE_ABC[] = {0xB7, 0x02};
 static const uint8_t T6615_COMMAND_SET_ELEVATION[] = {0x03, 0x0F};
+// Single-point calibration: 0x9B followed by a 16-bit target ppm value (MSB first).
+static const uint8_t T6615_COMMAND_CALIBRATE = 0x9B;
 
 void T6615Component::send_ppm_command_() {
   this->command_time_ = millis();
@@ -64,6 +66,21 @@ void T6615Component::send_version_command_() {
   this->write_byte(T6615_ADDR_SENSOR);
   this->write_byte(sizeof(T6615_COMMAND_GET_VERSION));
   this->write_array(T6615_COMMAND_GET_VERSION, sizeof(T6615_COMMAND_GET_VERSION));
+}
+
+void T6615Component::calibrate(uint16_t target_ppm) {
+  ESP_LOGI(TAG, "Triggering single-point calibration to %u ppm", target_ppm);
+  // Drain any pending in-flight response so the calibration ACK can be matched cleanly.
+  while (this->available())
+    this->read();
+  this->command_time_ = millis();
+  this->command_ = T6615Command::CALIBRATE;
+  const uint8_t payload[] = {T6615_COMMAND_CALIBRATE, static_cast<uint8_t>(target_ppm >> 8),
+                             static_cast<uint8_t>(target_ppm & 0xFF)};
+  this->write_byte(T6615_MAGIC);
+  this->write_byte(T6615_ADDR_SENSOR);
+  this->write_byte(sizeof(payload));
+  this->write_array(payload, sizeof(payload));
 }
 
 void T6615Component::publish_status_(uint8_t status) {
@@ -161,6 +178,11 @@ void T6615Component::loop() {
       this->read_array(response_buffer + 4, remaining);
       response_buffer[4 + remaining] = '\0';
       ESP_LOGD(TAG, "T6615 Received version=%s", response_buffer + 3);
+      break;
+    }
+    case T6615Command::CALIBRATE: {
+      // The sensor replies with a single status/ack byte; non-zero typically indicates rejection.
+      ESP_LOGI(TAG, "T6615 calibration ack: 0x%02X", response_buffer[3]);
       break;
     }
     default:

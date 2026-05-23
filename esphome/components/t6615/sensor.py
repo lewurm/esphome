@@ -1,3 +1,5 @@
+from esphome import automation
+from esphome.automation import maybe_simple_id
 import esphome.codegen as cg
 from esphome.components import sensor, uart
 import esphome.config_validation as cv
@@ -6,6 +8,7 @@ from esphome.const import (
     CONF_CO2,
     CONF_ID,
     CONF_STATUS,
+    CONF_VALUE,
     DEVICE_CLASS_CARBON_DIOXIDE,
     ENTITY_CATEGORY_DIAGNOSTIC,
     STATE_CLASS_MEASUREMENT,
@@ -26,6 +29,9 @@ UNIT_FOOT = "ft"
 
 t6615_ns = cg.esphome_ns.namespace("t6615")
 T6615Component = t6615_ns.class_("T6615Component", cg.PollingComponent, uart.UARTDevice)
+T6615CalibrateAction = t6615_ns.class_(
+    "T6615CalibrateAction", automation.Action, cg.Parented.template(T6615Component)
+)
 
 
 def diagnostic_bit_schema():
@@ -96,3 +102,22 @@ async def to_code(config):
         if sub := config.get(key):
             sens = await sensor.new_sensor(sub)
             cg.add(getattr(var, setter)(sens))
+
+
+CALIBRATE_ACTION_SCHEMA = maybe_simple_id(
+    {
+        cv.Required(CONF_ID): cv.use_id(T6615Component),
+        cv.Required(CONF_VALUE): cv.templatable(cv.int_range(min=0, max=65535)),
+    }
+)
+
+
+@automation.register_action(
+    "t6615.calibrate", T6615CalibrateAction, CALIBRATE_ACTION_SCHEMA
+)
+async def t6615_calibrate_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    target = await cg.templatable(config[CONF_VALUE], args, cg.uint16)
+    cg.add(var.set_target_ppm(target))
+    return var
