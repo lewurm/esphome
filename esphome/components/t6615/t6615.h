@@ -19,6 +19,7 @@ enum class T6615Command : uint8_t {
   ENABLE_ABC,
   DISABLE_ABC,
   SET_ELEVATION,
+  SET_SGPT_PPM,
   CALIBRATE,
 };
 
@@ -68,6 +69,8 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   void send_abc_get_command_();
   void send_abc_enable_command_();
   void send_abc_disable_command_();
+  void send_set_sgpt_ppm_command_(uint16_t target_ppm);
+  void send_sgpt_calibrate_command_();
 
   bool command_in_flight_() const;
 

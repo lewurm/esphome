@@ -26,17 +26,23 @@ static const uint8_t T6615_COMMAND_GET_ABC[] = {0xB7, 0x00};
 static const uint8_t T6615_COMMAND_ENABLE_ABC[] = {0xB7, 0x01};
 static const uint8_t T6615_COMMAND_DISABLE_ABC[] = {0xB7, 0x02};
 static const uint8_t T6615_COMMAND_SET_ELEVATION[] = {0x03, 0x0F};
-// Single-point calibration: 0x9B followed by a 16-bit target ppm value (MSB first).
-static const uint8_t T6615_COMMAND_CALIBRATE = 0x9B;
+// Set single-point ppm target (CMD_SET_SGPT_PPM): 0x03 0x11 followed by a 16-bit ppm value
+// (MSB first). Per the T63182-004 protocol doc this must be sent BEFORE CMD_SGPT_CALIBRATE; the
+// calibrate command itself carries no payload.
+static const uint8_t T6615_COMMAND_SET_SGPT_PPM[] = {0x03, 0x11};
+// Single-point calibration (CMD_SGPT_CALIBRATE): bare 0x9B. The ppm target is set separately via
+// T6615_COMMAND_SET_SGPT_PPM above.
+static const uint8_t T6615_COMMAND_SGPT_CALIBRATE = 0x9B;
 
 bool T6615Component::command_in_flight_() const {
   if (this->command_ == T6615Command::NONE)
     return false;
-  // Pick the per-command grace window. CALIBRATE and the ABC commands can take several seconds to
-  // ack; everything else should respond within ~1 s. Both loop() and update() consult this so the
-  // poll loop will not stomp an in-flight slow command with a routine query.
-  const bool slow = this->command_ == T6615Command::CALIBRATE || this->command_ == T6615Command::GET_ABC ||
-                    this->command_ == T6615Command::ENABLE_ABC || this->command_ == T6615Command::DISABLE_ABC;
+  // Pick the per-command grace window. CALIBRATE, SET_SGPT_PPM, and the ABC commands can take
+  // several seconds to ack; everything else should respond within ~1 s. Both loop() and update()
+  // consult this so the poll loop will not stomp an in-flight slow command with a routine query.
+  const bool slow = this->command_ == T6615Command::CALIBRATE || this->command_ == T6615Command::SET_SGPT_PPM ||
+                    this->command_ == T6615Command::GET_ABC || this->command_ == T6615Command::ENABLE_ABC ||
+                    this->command_ == T6615Command::DISABLE_ABC;
   const uint32_t timeout = slow ? T6615_SLOW_TIMEOUT : T6615_TIMEOUT;
   return (millis() - this->command_time_) < timeout;
 }
@@ -134,19 +140,34 @@ void T6615Component::abc_disable() {
   this->send_abc_disable_command_();
 }
 
-void T6615Component::calibrate(uint16_t target_ppm) {
-  ESP_LOGI(TAG, "Triggering single-point calibration to %u ppm", target_ppm);
-  // Drain any pending in-flight response so the calibration ACK can be matched cleanly.
-  while (this->available())
-    this->read();
+void T6615Component::send_set_sgpt_ppm_command_(uint16_t target_ppm) {
   this->command_time_ = millis();
-  this->command_ = T6615Command::CALIBRATE;
-  const uint8_t payload[] = {T6615_COMMAND_CALIBRATE, static_cast<uint8_t>(target_ppm >> 8),
-                             static_cast<uint8_t>(target_ppm & 0xFF)};
+  this->command_ = T6615Command::SET_SGPT_PPM;
+  const uint8_t payload[] = {T6615_COMMAND_SET_SGPT_PPM[0], T6615_COMMAND_SET_SGPT_PPM[1],
+                             static_cast<uint8_t>(target_ppm >> 8), static_cast<uint8_t>(target_ppm & 0xFF)};
   this->write_byte(T6615_MAGIC);
   this->write_byte(T6615_ADDR_SENSOR);
   this->write_byte(sizeof(payload));
   this->write_array(payload, sizeof(payload));
+}
+
+void T6615Component::send_sgpt_calibrate_command_() {
+  this->command_time_ = millis();
+  this->command_ = T6615Command::CALIBRATE;
+  this->write_byte(T6615_MAGIC);
+  this->write_byte(T6615_ADDR_SENSOR);
+  this->write_byte(1);
+  this->write_byte(T6615_COMMAND_SGPT_CALIBRATE);
+}
+
+void T6615Component::calibrate(uint16_t target_ppm) {
+  ESP_LOGI(TAG, "Single-point calibration: setting target to %u ppm, then triggering calibrate", target_ppm);
+  // Drain any pending in-flight response so the upcoming ACKs can be matched cleanly. The full
+  // protocol sequence per T63182-004 is SET_SGPT_PPM (ack) -> SGPT_CALIBRATE (ack); the chain
+  // to the second command is kicked off from the SET_SGPT_PPM case in loop().
+  while (this->available())
+    this->read();
+  this->send_set_sgpt_ppm_command_(target_ppm);
 }
 
 void T6615Component::publish_status_(uint8_t status) {
@@ -280,6 +301,18 @@ void T6615Component::loop() {
     case T6615Command::DISABLE_ABC: {
       ESP_LOGI(TAG, "T6615 ABC disable ack (payload len=%u)", payload_len);
       break;
+    }
+    case T6615Command::SET_SGPT_PPM: {
+      // Per spec the reply is <ACK> (header-only, len=0). Once we have it, chain into the bare
+      // CMD_SGPT_CALIBRATE that actually triggers the calibration cycle. Return early so the
+      // tail cleanup at the bottom of loop() doesn't clobber the freshly-set command_.
+      if (payload_len != 0) {
+        ESP_LOGW(TAG, "T6615 SET_SGPT_PPM ack with payload len=%u, first byte=0x%02X", payload_len,
+                 response_buffer[3]);
+      }
+      ESP_LOGD(TAG, "T6615 SET_SGPT_PPM ack received; sending SGPT_CALIBRATE");
+      this->send_sgpt_calibrate_command_();
+      return;
     }
     case T6615Command::CALIBRATE: {
       // The Telaire protocol acks a successful write with a header-only reply (len=0). A non-zero
