@@ -43,6 +43,12 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   // the provided ppm value (typical use: place sensor in fresh outdoor air and call with 400).
   void calibrate(uint16_t target_ppm);
 
+  // ABC (Automatic Baseline Calibration) control. The response payload of abc_query is logged so
+  // the current ABC state/period can be inspected at runtime.
+  void abc_query();
+  void abc_enable();
+  void abc_disable();
+
   void set_co2_sensor(sensor::Sensor *co2_sensor) { this->co2_sensor_ = co2_sensor; }
   void set_status_sensor(sensor::Sensor *s) { this->status_sensor_ = s; }
   void set_error_sensor(sensor::Sensor *s) { this->error_sensor_ = s; }
@@ -59,6 +65,9 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   void send_elevation_command_();
   void send_serial_command_();
   void send_version_command_();
+  void send_abc_get_command_();
+  void send_abc_enable_command_();
+  void send_abc_disable_command_();
 
   void publish_status_(uint8_t status);
 
@@ -82,6 +91,21 @@ template<typename... Ts> class T6615CalibrateAction : public Action<Ts...>, publ
   TEMPLATABLE_VALUE(uint16_t, target_ppm)
 
   void play(const Ts &...x) override { this->parent_->calibrate(this->target_ppm_.value(x...)); }
+};
+
+template<typename... Ts> class T6615ABCQueryAction : public Action<Ts...>, public Parented<T6615Component> {
+ public:
+  void play(const Ts &...) override { this->parent_->abc_query(); }
+};
+
+template<typename... Ts> class T6615ABCEnableAction : public Action<Ts...>, public Parented<T6615Component> {
+ public:
+  void play(const Ts &...) override { this->parent_->abc_enable(); }
+};
+
+template<typename... Ts> class T6615ABCDisableAction : public Action<Ts...>, public Parented<T6615Component> {
+ public:
+  void play(const Ts &...) override { this->parent_->abc_disable(); }
 };
 
 }  // namespace t6615

@@ -74,6 +74,54 @@ void T6615Component::send_version_command_() {
   this->write_array(T6615_COMMAND_GET_VERSION, sizeof(T6615_COMMAND_GET_VERSION));
 }
 
+void T6615Component::send_abc_get_command_() {
+  this->command_time_ = millis();
+  this->command_ = T6615Command::GET_ABC;
+  this->write_byte(T6615_MAGIC);
+  this->write_byte(T6615_ADDR_SENSOR);
+  this->write_byte(sizeof(T6615_COMMAND_GET_ABC));
+  this->write_array(T6615_COMMAND_GET_ABC, sizeof(T6615_COMMAND_GET_ABC));
+}
+
+void T6615Component::send_abc_enable_command_() {
+  this->command_time_ = millis();
+  this->command_ = T6615Command::ENABLE_ABC;
+  this->write_byte(T6615_MAGIC);
+  this->write_byte(T6615_ADDR_SENSOR);
+  this->write_byte(sizeof(T6615_COMMAND_ENABLE_ABC));
+  this->write_array(T6615_COMMAND_ENABLE_ABC, sizeof(T6615_COMMAND_ENABLE_ABC));
+}
+
+void T6615Component::send_abc_disable_command_() {
+  this->command_time_ = millis();
+  this->command_ = T6615Command::DISABLE_ABC;
+  this->write_byte(T6615_MAGIC);
+  this->write_byte(T6615_ADDR_SENSOR);
+  this->write_byte(sizeof(T6615_COMMAND_DISABLE_ABC));
+  this->write_array(T6615_COMMAND_DISABLE_ABC, sizeof(T6615_COMMAND_DISABLE_ABC));
+}
+
+void T6615Component::abc_query() {
+  ESP_LOGI(TAG, "Querying ABC state");
+  while (this->available())
+    this->read();
+  this->send_abc_get_command_();
+}
+
+void T6615Component::abc_enable() {
+  ESP_LOGI(TAG, "Enabling ABC");
+  while (this->available())
+    this->read();
+  this->send_abc_enable_command_();
+}
+
+void T6615Component::abc_disable() {
+  ESP_LOGI(TAG, "Disabling ABC");
+  while (this->available())
+    this->read();
+  this->send_abc_disable_command_();
+}
+
 void T6615Component::calibrate(uint16_t target_ppm) {
   ESP_LOGI(TAG, "Triggering single-point calibration to %u ppm", target_ppm);
   // Drain any pending in-flight response so the calibration ACK can be matched cleanly.
@@ -197,6 +245,30 @@ void T6615Component::loop() {
     case T6615Command::GET_VERSION: {
       response_buffer[3 + payload_len] = '\0';
       ESP_LOGD(TAG, "T6615 Received version=%s", response_buffer + 3);
+      break;
+    }
+    case T6615Command::GET_ABC: {
+      // The Telaire docs describe the GET_ABC response as carrying the current ABC configuration
+      // (state byte and/or period). Dump all received payload bytes so we can read whatever the
+      // sensor actually returns.
+      if (payload_len == 0) {
+        ESP_LOGW(TAG, "T6615 ABC query: empty response");
+      } else {
+        char hex_buf[3 * 15 + 1];
+        size_t pos = 0;
+        for (uint8_t i = 0; i < payload_len && i < 15; i++) {
+          pos += snprintf(hex_buf + pos, sizeof(hex_buf) - pos, "%02X ", response_buffer[3 + i]);
+        }
+        ESP_LOGI(TAG, "T6615 ABC query response (%u bytes): %s", payload_len, hex_buf);
+      }
+      break;
+    }
+    case T6615Command::ENABLE_ABC: {
+      ESP_LOGI(TAG, "T6615 ABC enable ack (payload len=%u)", payload_len);
+      break;
+    }
+    case T6615Command::DISABLE_ABC: {
+      ESP_LOGI(TAG, "T6615 ABC disable ack (payload len=%u)", payload_len);
       break;
     }
     case T6615Command::CALIBRATE: {
