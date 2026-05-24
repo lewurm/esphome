@@ -25,6 +25,8 @@ static const uint8_t T6615_COMMAND_GET_STATUS[] = {0xB6};
 static const uint8_t T6615_COMMAND_GET_ABC[] = {0xB7, 0x00};
 static const uint8_t T6615_COMMAND_ENABLE_ABC[] = {0xB7, 0x01};
 static const uint8_t T6615_COMMAND_DISABLE_ABC[] = {0xB7, 0x02};
+// CMD_ABC_LOGIC_RESET: turns ABC ON and resets the internal ABC state to its startup value.
+static const uint8_t T6615_COMMAND_RESET_ABC[] = {0xB7, 0x03};
 static const uint8_t T6615_COMMAND_SET_ELEVATION[] = {0x03, 0x0F};
 // Set single-point ppm target (CMD_SET_SGPT_PPM): 0x03 0x11 followed by a 16-bit ppm value
 // (MSB first). Per the T63182-004 protocol doc this must be sent BEFORE CMD_SGPT_CALIBRATE; the
@@ -42,7 +44,7 @@ bool T6615Component::command_in_flight_() const {
   // consult this so the poll loop will not stomp an in-flight slow command with a routine query.
   const bool slow = this->command_ == T6615Command::CALIBRATE || this->command_ == T6615Command::SET_SGPT_PPM ||
                     this->command_ == T6615Command::GET_ABC || this->command_ == T6615Command::ENABLE_ABC ||
-                    this->command_ == T6615Command::DISABLE_ABC;
+                    this->command_ == T6615Command::DISABLE_ABC || this->command_ == T6615Command::RESET_ABC;
   const uint32_t timeout = slow ? T6615_SLOW_TIMEOUT : T6615_TIMEOUT;
   return (millis() - this->command_time_) < timeout;
 }
@@ -119,6 +121,15 @@ void T6615Component::send_abc_disable_command_() {
   this->write_array(T6615_COMMAND_DISABLE_ABC, sizeof(T6615_COMMAND_DISABLE_ABC));
 }
 
+void T6615Component::send_abc_reset_command_() {
+  this->command_time_ = millis();
+  this->command_ = T6615Command::RESET_ABC;
+  this->write_byte(T6615_MAGIC);
+  this->write_byte(T6615_ADDR_SENSOR);
+  this->write_byte(sizeof(T6615_COMMAND_RESET_ABC));
+  this->write_array(T6615_COMMAND_RESET_ABC, sizeof(T6615_COMMAND_RESET_ABC));
+}
+
 void T6615Component::abc_query() {
   ESP_LOGI(TAG, "Querying ABC state");
   while (this->available())
@@ -138,6 +149,13 @@ void T6615Component::abc_disable() {
   while (this->available())
     this->read();
   this->send_abc_disable_command_();
+}
+
+void T6615Component::abc_reset() {
+  ESP_LOGI(TAG, "Resetting ABC (turns ABC ON and resets internal state to startup)");
+  while (this->available())
+    this->read();
+  this->send_abc_reset_command_();
 }
 
 void T6615Component::send_set_sgpt_ppm_command_(uint16_t target_ppm) {
@@ -322,6 +340,11 @@ void T6615Component::loop() {
     case T6615Command::DISABLE_ABC: {
       // Per spec the reply is <0x02> confirming ABC is now OFF.
       this->log_abc_state_("disable", payload_len, response_buffer + 3);
+      break;
+    }
+    case T6615Command::RESET_ABC: {
+      // Per spec the reply is <0x01> -- reset always turns ABC ON.
+      this->log_abc_state_("reset", payload_len, response_buffer + 3);
       break;
     }
     case T6615Command::SET_SGPT_PPM: {

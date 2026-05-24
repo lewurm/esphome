@@ -41,6 +41,9 @@ T6615ABCEnableAction = t6615_ns.class_(
 T6615ABCDisableAction = t6615_ns.class_(
     "T6615ABCDisableAction", automation.Action, cg.Parented.template(T6615Component)
 )
+T6615ABCResetAction = t6615_ns.class_(
+    "T6615ABCResetAction", automation.Action, cg.Parented.template(T6615Component)
+)
 
 
 def diagnostic_bit_schema():
@@ -157,4 +160,9 @@ async def t6615_abc_enable_to_code(config, action_id, template_arg, args):
 
 @automation.register_action("t6615.abc_disable", T6615ABCDisableAction, ABC_ACTION_SCHEMA)
 async def t6615_abc_disable_to_code(config, action_id, template_arg, args):
+    return await _abc_action_to_code(config, action_id, template_arg, args)
+
+
+@automation.register_action("t6615.abc_reset", T6615ABCResetAction, ABC_ACTION_SCHEMA)
+async def t6615_abc_reset_to_code(config, action_id, template_arg, args):
     return await _abc_action_to_code(config, action_id, template_arg, args)
