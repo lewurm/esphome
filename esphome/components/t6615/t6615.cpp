@@ -8,9 +8,9 @@ namespace t6615 {
 static const char *const TAG = "t6615";
 
 static const uint32_t T6615_TIMEOUT = 1000;
-// Single-point calibration triggers a longer measurement cycle on the sensor; observed
-// reply latency is ~1 s, so allow generous headroom before declaring it lost.
-static const uint32_t T6615_CALIBRATE_TIMEOUT = 5000;
+// Single-point calibration and ABC control/query commands trigger a longer measurement cycle on
+// the sensor; observed reply latency is up to several seconds, so allow generous headroom.
+static const uint32_t T6615_SLOW_TIMEOUT = 10000;
 // At 19200 baud each byte is ~520 us, so a 15-byte payload arrives in ~8 ms once the
 // header has been seen. Cap how long we are willing to spin waiting for the tail.
 static const uint32_t T6615_PAYLOAD_TIMEOUT = 50;
@@ -28,6 +28,18 @@ static const uint8_t T6615_COMMAND_DISABLE_ABC[] = {0xB7, 0x02};
 static const uint8_t T6615_COMMAND_SET_ELEVATION[] = {0x03, 0x0F};
 // Single-point calibration: 0x9B followed by a 16-bit target ppm value (MSB first).
 static const uint8_t T6615_COMMAND_CALIBRATE = 0x9B;
+
+bool T6615Component::command_in_flight_() const {
+  if (this->command_ == T6615Command::NONE)
+    return false;
+  // Pick the per-command grace window. CALIBRATE and the ABC commands can take several seconds to
+  // ack; everything else should respond within ~1 s. Both loop() and update() consult this so the
+  // poll loop will not stomp an in-flight slow command with a routine query.
+  const bool slow = this->command_ == T6615Command::CALIBRATE || this->command_ == T6615Command::GET_ABC ||
+                    this->command_ == T6615Command::ENABLE_ABC || this->command_ == T6615Command::DISABLE_ABC;
+  const uint32_t timeout = slow ? T6615_SLOW_TIMEOUT : T6615_TIMEOUT;
+  return (millis() - this->command_time_) < timeout;
+}
 
 void T6615Component::send_ppm_command_() {
   this->command_time_ = millis();
@@ -159,14 +171,7 @@ void T6615Component::loop() {
   // only then for `LEN` payload bytes. The CALIBRATE ack is a 3-byte header with len=0, which
   // the previous "wait for 4 bytes" logic could never satisfy.
   if (this->available() < 3) {
-    // CALIBRATE and the ABC control/query commands trigger a longer sensor-side processing cycle,
-    // so the ack/response can take ~1 s to come back. Use a generous timeout for those.
-    const bool slow_command = this->command_ == T6615Command::CALIBRATE ||
-                              this->command_ == T6615Command::GET_ABC ||
-                              this->command_ == T6615Command::ENABLE_ABC ||
-                              this->command_ == T6615Command::DISABLE_ABC;
-    const uint32_t timeout = slow_command ? T6615_CALIBRATE_TIMEOUT : T6615_TIMEOUT;
-    if (this->command_ != T6615Command::NONE && millis() - this->command_time_ > timeout) {
+    if (!this->command_in_flight_() && this->command_ != T6615Command::NONE) {
       ESP_LOGW(TAG, "timeout receiving answer for command %u, clearing buffer.",
                static_cast<uint8_t>(this->command_));
       while (this->available())
@@ -297,8 +302,9 @@ void T6615Component::loop() {
 }
 
 void T6615Component::update() {
-  // Don't start a new command if one is still in flight.
-  if (this->command_ != T6615Command::NONE && millis() - this->command_time_ < T6615_TIMEOUT) {
+  // Don't start a new command if one is still in flight. This matters most for slow commands
+  // (CALIBRATE, ABC*) whose response can take longer than this poll interval.
+  if (this->command_in_flight_()) {
     return;
   }
 
