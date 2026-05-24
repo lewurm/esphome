@@ -159,8 +159,13 @@ void T6615Component::loop() {
   // only then for `LEN` payload bytes. The CALIBRATE ack is a 3-byte header with len=0, which
   // the previous "wait for 4 bytes" logic could never satisfy.
   if (this->available() < 3) {
-    const uint32_t timeout =
-        (this->command_ == T6615Command::CALIBRATE) ? T6615_CALIBRATE_TIMEOUT : T6615_TIMEOUT;
+    // CALIBRATE and the ABC control/query commands trigger a longer sensor-side processing cycle,
+    // so the ack/response can take ~1 s to come back. Use a generous timeout for those.
+    const bool slow_command = this->command_ == T6615Command::CALIBRATE ||
+                              this->command_ == T6615Command::GET_ABC ||
+                              this->command_ == T6615Command::ENABLE_ABC ||
+                              this->command_ == T6615Command::DISABLE_ABC;
+    const uint32_t timeout = slow_command ? T6615_CALIBRATE_TIMEOUT : T6615_TIMEOUT;
     if (this->command_ != T6615Command::NONE && millis() - this->command_time_ > timeout) {
       ESP_LOGW(TAG, "timeout receiving answer for command %u, clearing buffer.",
                static_cast<uint8_t>(this->command_));
