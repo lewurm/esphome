@@ -8,6 +8,12 @@ namespace t6615 {
 static const char *const TAG = "t6615";
 
 static const uint32_t T6615_TIMEOUT = 1000;
+// Single-point calibration triggers a longer measurement cycle on the sensor; observed
+// reply latency is ~1 s, so allow generous headroom before declaring it lost.
+static const uint32_t T6615_CALIBRATE_TIMEOUT = 5000;
+// At 19200 baud each byte is ~520 us, so a 15-byte payload arrives in ~8 ms once the
+// header has been seen. Cap how long we are willing to spin waiting for the tail.
+static const uint32_t T6615_PAYLOAD_TIMEOUT = 50;
 static const uint8_t T6615_MAGIC = 0xFF;
 static const uint8_t T6615_ADDR_HOST = 0xFA;
 static const uint8_t T6615_ADDR_SENSOR = 0xFE;
@@ -101,8 +107,13 @@ void T6615Component::publish_status_(uint8_t status) {
 }
 
 void T6615Component::loop() {
-  if (this->available() < 4) {
-    if (this->command_ != T6615Command::NONE && millis() - this->command_time_ > T6615_TIMEOUT) {
+  // The reply framing is [MAGIC][ADDR][LEN][DATA...]. We first wait for the 3-byte header and
+  // only then for `LEN` payload bytes. The CALIBRATE ack is a 3-byte header with len=0, which
+  // the previous "wait for 4 bytes" logic could never satisfy.
+  if (this->available() < 3) {
+    const uint32_t timeout =
+        (this->command_ == T6615Command::CALIBRATE) ? T6615_CALIBRATE_TIMEOUT : T6615_TIMEOUT;
+    if (this->command_ != T6615Command::NONE && millis() - this->command_time_ > timeout) {
       ESP_LOGW(TAG, "timeout receiving answer for command %u, clearing buffer.",
                static_cast<uint8_t>(this->command_));
       while (this->available())
@@ -114,17 +125,13 @@ void T6615Component::loop() {
     return;
   }
 
-  uint8_t response_buffer[4 + 15];
+  uint8_t response_buffer[3 + 15];
   memset(response_buffer, '\0', sizeof(response_buffer));
+  this->read_array(response_buffer, 3);
 
-  /* by the time we get here, we know we have at least four bytes in the buffer */
-  this->read_array(response_buffer, 4);
-
-  // Read header
   if (response_buffer[0] != T6615_MAGIC || response_buffer[1] != T6615_ADDR_HOST) {
     ESP_LOGW(TAG, "Got bad data from T6615! Magic was %02X and address was %02X", response_buffer[0],
              response_buffer[1]);
-    /* make sure the buffer is empty */
     while (this->available())
       this->read();
     this->command_ = T6615Command::NONE;
@@ -135,13 +142,31 @@ void T6615Component::loop() {
 
   this->status_clear_warning();
 
-  // response_buffer[2] is the payload length; response_buffer[3] is the first payload byte.
   const uint8_t payload_len = response_buffer[2];
+
+  // Wait briefly for the payload bytes if they have not already arrived. At 19200 baud the
+  // longest payload we read (15 bytes) lands within ~8 ms of the header, so a 50 ms cap is
+  // very loose without holding the main loop too long.
+  if (payload_len > 0) {
+    const uint8_t to_read = payload_len > 15 ? 15 : payload_len;
+    const uint32_t wait_start = millis();
+    while (this->available() < to_read) {
+      if (millis() - wait_start > T6615_PAYLOAD_TIMEOUT) {
+        ESP_LOGW(TAG, "T6615 incomplete payload: got %u of %u bytes", this->available(), to_read);
+        while (this->available())
+          this->read();
+        this->command_ = T6615Command::NONE;
+        this->command_time_ = 0;
+        this->status_set_warning();
+        return;
+      }
+      delay(1);
+    }
+    this->read_array(response_buffer + 3, to_read);
+  }
 
   switch (this->command_) {
     case T6615Command::GET_PPM: {
-      /* GET_PPM reply payload is 2 bytes; we already have the first in response_buffer[3] */
-      this->read_array(response_buffer + 4, 1);
       const uint16_t ppm = encode_uint16(response_buffer[3], response_buffer[4]);
       ESP_LOGD(TAG, "T6615 Received CO2=%u ppm", ppm);
       if (this->co2_sensor_ != nullptr)
@@ -158,7 +183,6 @@ void T6615Component::loop() {
       break;
     }
     case T6615Command::GET_ELEVATION: {
-      this->read_array(response_buffer + 4, 1);
       const uint16_t elevation = encode_uint16(response_buffer[3], response_buffer[4]);
       ESP_LOGD(TAG, "T6615 Received elevation=%u ft", elevation);
       if (this->elevation_sensor_ != nullptr)
@@ -166,29 +190,29 @@ void T6615Component::loop() {
       break;
     }
     case T6615Command::GET_SERIAL: {
-      /* GET_SERIAL payload is up to 15 bytes; read remaining bytes */
-      const uint8_t remaining = (payload_len > 1 && payload_len <= 15) ? (payload_len - 1) : 14;
-      this->read_array(response_buffer + 4, remaining);
-      response_buffer[4 + remaining] = '\0';
+      response_buffer[3 + payload_len] = '\0';
       ESP_LOGD(TAG, "T6615 Received serial=%s", response_buffer + 3);
       break;
     }
     case T6615Command::GET_VERSION: {
-      const uint8_t remaining = (payload_len > 1 && payload_len <= 15) ? (payload_len - 1) : 14;
-      this->read_array(response_buffer + 4, remaining);
-      response_buffer[4 + remaining] = '\0';
+      response_buffer[3 + payload_len] = '\0';
       ESP_LOGD(TAG, "T6615 Received version=%s", response_buffer + 3);
       break;
     }
     case T6615Command::CALIBRATE: {
-      // The sensor replies with a single status/ack byte; non-zero typically indicates rejection.
-      ESP_LOGI(TAG, "T6615 calibration ack: 0x%02X", response_buffer[3]);
+      // The Telaire protocol acks a successful write with a header-only reply (len=0). A non-zero
+      // len here would carry an error/status byte from the sensor.
+      if (payload_len == 0) {
+        ESP_LOGI(TAG, "T6615 calibration accepted");
+      } else {
+        ESP_LOGW(TAG, "T6615 calibration ack with payload len=%u, first byte=0x%02X", payload_len,
+                 response_buffer[3]);
+      }
       break;
     }
     default:
       break;
   }
-  /* drain anything unexpected */
   while (this->available())
     this->read();
   this->command_time_ = 0;
