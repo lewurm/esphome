@@ -170,6 +170,37 @@ void T6615Component::calibrate(uint16_t target_ppm) {
   this->send_set_sgpt_ppm_command_(target_ppm);
 }
 
+void T6615Component::log_abc_state_(const char *action, uint8_t payload_len, const uint8_t *payload) {
+  if (payload_len == 0) {
+    ESP_LOGW(TAG, "T6615 ABC %s: empty response", action);
+    return;
+  }
+  const uint8_t state = payload[0];
+  const char *meaning;
+  switch (state) {
+    case 0x01:
+      meaning = "ON";
+      break;
+    case 0x02:
+      meaning = "OFF";
+      break;
+    default:
+      meaning = "unknown";
+      break;
+  }
+  if (payload_len == 1) {
+    ESP_LOGI(TAG, "T6615 ABC %s: state=0x%02X (%s)", action, state, meaning);
+  } else {
+    // Extra bytes shouldn't appear per spec; surface them so we can diagnose firmware quirks.
+    char hex_buf[3 * 15 + 1];
+    size_t pos = 0;
+    for (uint8_t i = 0; i < payload_len && i < 15; i++) {
+      pos += snprintf(hex_buf + pos, sizeof(hex_buf) - pos, "%02X ", payload[i]);
+    }
+    ESP_LOGI(TAG, "T6615 ABC %s: state=0x%02X (%s), %u bytes: %s", action, state, meaning, payload_len, hex_buf);
+  }
+}
+
 void T6615Component::publish_status_(uint8_t status) {
   if (this->status_sensor_ != nullptr)
     this->status_sensor_->publish_state(status);
@@ -279,27 +310,18 @@ void T6615Component::loop() {
       break;
     }
     case T6615Command::GET_ABC: {
-      // The Telaire docs describe the GET_ABC response as carrying the current ABC configuration
-      // (state byte and/or period). Dump all received payload bytes so we can read whatever the
-      // sensor actually returns.
-      if (payload_len == 0) {
-        ESP_LOGW(TAG, "T6615 ABC query: empty response");
-      } else {
-        char hex_buf[3 * 15 + 1];
-        size_t pos = 0;
-        for (uint8_t i = 0; i < payload_len && i < 15; i++) {
-          pos += snprintf(hex_buf + pos, sizeof(hex_buf) - pos, "%02X ", response_buffer[3 + i]);
-        }
-        ESP_LOGI(TAG, "T6615 ABC query response (%u bytes): %s", payload_len, hex_buf);
-      }
+      // Per T63182-004, GET_ABC returns a single byte: 0x01 = ABC ON, 0x02 = ABC OFF.
+      this->log_abc_state_("query", payload_len, response_buffer + 3);
       break;
     }
     case T6615Command::ENABLE_ABC: {
-      ESP_LOGI(TAG, "T6615 ABC enable ack (payload len=%u)", payload_len);
+      // Per spec the reply is <0x01> confirming ABC is now ON.
+      this->log_abc_state_("enable", payload_len, response_buffer + 3);
       break;
     }
     case T6615Command::DISABLE_ABC: {
-      ESP_LOGI(TAG, "T6615 ABC disable ack (payload len=%u)", payload_len);
+      // Per spec the reply is <0x02> confirming ABC is now OFF.
+      this->log_abc_state_("disable", payload_len, response_buffer + 3);
       break;
     }
     case T6615Command::SET_SGPT_PPM: {

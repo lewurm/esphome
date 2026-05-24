@@ -75,6 +75,7 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   bool command_in_flight_() const;
 
   void publish_status_(uint8_t status);
+  void log_abc_state_(const char *action, uint8_t payload_len, const uint8_t *payload);
 
   T6615Command command_ = T6615Command::NONE;
   uint32_t command_time_ = 0;
