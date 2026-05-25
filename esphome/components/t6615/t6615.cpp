@@ -8,9 +8,10 @@ namespace t6615 {
 static const char *const TAG = "t6615";
 
 static const uint32_t T6615_TIMEOUT = 1000;
-// Single-point calibration and ABC control/query commands trigger a longer measurement cycle on
-// the sensor; observed reply latency is up to several seconds, so allow generous headroom.
-static const uint32_t T6615_SLOW_TIMEOUT = 10000;
+// Single-point calibration triggers a measurement cycle on the sensor; the documented reply is
+// just an ACK acknowledging the command was received, but allow generous headroom in case the
+// sensor delays the ACK while it starts the calibration cycle.
+static const uint32_t T6615_SLOW_TIMEOUT = 5000;
 // At 19200 baud each byte is ~520 us, so a 15-byte payload arrives in ~8 ms once the
 // header has been seen. Cap how long we are willing to spin waiting for the tail.
 static const uint32_t T6615_PAYLOAD_TIMEOUT = 50;
@@ -22,11 +23,6 @@ static const uint8_t T6615_COMMAND_GET_SERIAL[] = {0x02, 0x01};
 static const uint8_t T6615_COMMAND_GET_VERSION[] = {0x02, 0x0D};
 static const uint8_t T6615_COMMAND_GET_ELEVATION[] = {0x02, 0x0F};
 static const uint8_t T6615_COMMAND_GET_STATUS[] = {0xB6};
-static const uint8_t T6615_COMMAND_GET_ABC[] = {0xB7, 0x00};
-static const uint8_t T6615_COMMAND_ENABLE_ABC[] = {0xB7, 0x01};
-static const uint8_t T6615_COMMAND_DISABLE_ABC[] = {0xB7, 0x02};
-// CMD_ABC_LOGIC_RESET: turns ABC ON and resets the internal ABC state to its startup value.
-static const uint8_t T6615_COMMAND_RESET_ABC[] = {0xB7, 0x03};
 static const uint8_t T6615_COMMAND_SET_ELEVATION[] = {0x03, 0x0F};
 // Set single-point ppm target (CMD_SET_SGPT_PPM): 0x03 0x11 followed by a 16-bit ppm value
 // (MSB first). Per the T63182-004 protocol doc this must be sent BEFORE CMD_SGPT_CALIBRATE; the
@@ -39,12 +35,10 @@ static const uint8_t T6615_COMMAND_SGPT_CALIBRATE = 0x9B;
 bool T6615Component::command_in_flight_() const {
   if (this->command_ == T6615Command::NONE)
     return false;
-  // Pick the per-command grace window. CALIBRATE, SET_SGPT_PPM, and the ABC commands can take
-  // several seconds to ack; everything else should respond within ~1 s. Both loop() and update()
-  // consult this so the poll loop will not stomp an in-flight slow command with a routine query.
-  const bool slow = this->command_ == T6615Command::CALIBRATE || this->command_ == T6615Command::SET_SGPT_PPM ||
-                    this->command_ == T6615Command::GET_ABC || this->command_ == T6615Command::ENABLE_ABC ||
-                    this->command_ == T6615Command::DISABLE_ABC || this->command_ == T6615Command::RESET_ABC;
+  // Pick the per-command grace window. CALIBRATE and SET_SGPT_PPM can take a few seconds to ack;
+  // everything else should respond within ~1 s. Both loop() and update() consult this so the poll
+  // loop will not stomp an in-flight slow command with a routine query.
+  const bool slow = this->command_ == T6615Command::CALIBRATE || this->command_ == T6615Command::SET_SGPT_PPM;
   const uint32_t timeout = slow ? T6615_SLOW_TIMEOUT : T6615_TIMEOUT;
   return (millis() - this->command_time_) < timeout;
 }
@@ -94,70 +88,6 @@ void T6615Component::send_version_command_() {
   this->write_array(T6615_COMMAND_GET_VERSION, sizeof(T6615_COMMAND_GET_VERSION));
 }
 
-void T6615Component::send_abc_get_command_() {
-  this->command_time_ = millis();
-  this->command_ = T6615Command::GET_ABC;
-  this->write_byte(T6615_MAGIC);
-  this->write_byte(T6615_ADDR_SENSOR);
-  this->write_byte(sizeof(T6615_COMMAND_GET_ABC));
-  this->write_array(T6615_COMMAND_GET_ABC, sizeof(T6615_COMMAND_GET_ABC));
-}
-
-void T6615Component::send_abc_enable_command_() {
-  this->command_time_ = millis();
-  this->command_ = T6615Command::ENABLE_ABC;
-  this->write_byte(T6615_MAGIC);
-  this->write_byte(T6615_ADDR_SENSOR);
-  this->write_byte(sizeof(T6615_COMMAND_ENABLE_ABC));
-  this->write_array(T6615_COMMAND_ENABLE_ABC, sizeof(T6615_COMMAND_ENABLE_ABC));
-}
-
-void T6615Component::send_abc_disable_command_() {
-  this->command_time_ = millis();
-  this->command_ = T6615Command::DISABLE_ABC;
-  this->write_byte(T6615_MAGIC);
-  this->write_byte(T6615_ADDR_SENSOR);
-  this->write_byte(sizeof(T6615_COMMAND_DISABLE_ABC));
-  this->write_array(T6615_COMMAND_DISABLE_ABC, sizeof(T6615_COMMAND_DISABLE_ABC));
-}
-
-void T6615Component::send_abc_reset_command_() {
-  this->command_time_ = millis();
-  this->command_ = T6615Command::RESET_ABC;
-  this->write_byte(T6615_MAGIC);
-  this->write_byte(T6615_ADDR_SENSOR);
-  this->write_byte(sizeof(T6615_COMMAND_RESET_ABC));
-  this->write_array(T6615_COMMAND_RESET_ABC, sizeof(T6615_COMMAND_RESET_ABC));
-}
-
-void T6615Component::abc_query() {
-  ESP_LOGI(TAG, "Querying ABC state");
-  while (this->available())
-    this->read();
-  this->send_abc_get_command_();
-}
-
-void T6615Component::abc_enable() {
-  ESP_LOGI(TAG, "Enabling ABC");
-  while (this->available())
-    this->read();
-  this->send_abc_enable_command_();
-}
-
-void T6615Component::abc_disable() {
-  ESP_LOGI(TAG, "Disabling ABC");
-  while (this->available())
-    this->read();
-  this->send_abc_disable_command_();
-}
-
-void T6615Component::abc_reset() {
-  ESP_LOGI(TAG, "Resetting ABC (turns ABC ON and resets internal state to startup)");
-  while (this->available())
-    this->read();
-  this->send_abc_reset_command_();
-}
-
 void T6615Component::send_set_sgpt_ppm_command_(uint16_t target_ppm) {
   this->command_time_ = millis();
   this->command_ = T6615Command::SET_SGPT_PPM;
@@ -186,37 +116,6 @@ void T6615Component::calibrate(uint16_t target_ppm) {
   while (this->available())
     this->read();
   this->send_set_sgpt_ppm_command_(target_ppm);
-}
-
-void T6615Component::log_abc_state_(const char *action, uint8_t payload_len, const uint8_t *payload) {
-  if (payload_len == 0) {
-    ESP_LOGW(TAG, "T6615 ABC %s: empty response", action);
-    return;
-  }
-  const uint8_t state = payload[0];
-  const char *meaning;
-  switch (state) {
-    case 0x01:
-      meaning = "ON";
-      break;
-    case 0x02:
-      meaning = "OFF";
-      break;
-    default:
-      meaning = "unknown";
-      break;
-  }
-  if (payload_len == 1) {
-    ESP_LOGI(TAG, "T6615 ABC %s: state=0x%02X (%s)", action, state, meaning);
-  } else {
-    // Extra bytes shouldn't appear per spec; surface them so we can diagnose firmware quirks.
-    char hex_buf[3 * 15 + 1];
-    size_t pos = 0;
-    for (uint8_t i = 0; i < payload_len && i < 15; i++) {
-      pos += snprintf(hex_buf + pos, sizeof(hex_buf) - pos, "%02X ", payload[i]);
-    }
-    ESP_LOGI(TAG, "T6615 ABC %s: state=0x%02X (%s), %u bytes: %s", action, state, meaning, payload_len, hex_buf);
-  }
 }
 
 void T6615Component::publish_status_(uint8_t status) {
@@ -327,26 +226,6 @@ void T6615Component::loop() {
       ESP_LOGD(TAG, "T6615 Received version=%s", response_buffer + 3);
       break;
     }
-    case T6615Command::GET_ABC: {
-      // Per T63182-004, GET_ABC returns a single byte: 0x01 = ABC ON, 0x02 = ABC OFF.
-      this->log_abc_state_("query", payload_len, response_buffer + 3);
-      break;
-    }
-    case T6615Command::ENABLE_ABC: {
-      // Per spec the reply is <0x01> confirming ABC is now ON.
-      this->log_abc_state_("enable", payload_len, response_buffer + 3);
-      break;
-    }
-    case T6615Command::DISABLE_ABC: {
-      // Per spec the reply is <0x02> confirming ABC is now OFF.
-      this->log_abc_state_("disable", payload_len, response_buffer + 3);
-      break;
-    }
-    case T6615Command::RESET_ABC: {
-      // Per spec the reply is <0x01> -- reset always turns ABC ON.
-      this->log_abc_state_("reset", payload_len, response_buffer + 3);
-      break;
-    }
     case T6615Command::SET_SGPT_PPM: {
       // Per spec the reply is <ACK> (header-only, len=0). Once we have it, chain into the bare
       // CMD_SGPT_CALIBRATE that actually triggers the calibration cycle. Return early so the
@@ -381,7 +260,7 @@ void T6615Component::loop() {
 
 void T6615Component::update() {
   // Don't start a new command if one is still in flight. This matters most for slow commands
-  // (CALIBRATE, ABC*) whose response can take longer than this poll interval.
+  // (CALIBRATE, SET_SGPT_PPM) whose response can take longer than this poll interval.
   if (this->command_in_flight_()) {
     return;
   }

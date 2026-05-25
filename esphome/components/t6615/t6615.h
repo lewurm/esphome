@@ -15,10 +15,6 @@ enum class T6615Command : uint8_t {
   GET_VERSION,
   GET_ELEVATION,
   GET_STATUS,
-  GET_ABC,
-  ENABLE_ABC,
-  DISABLE_ABC,
-  RESET_ABC,
   SET_ELEVATION,
   SET_SGPT_PPM,
   CALIBRATE,
@@ -45,14 +41,6 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   // the provided ppm value (typical use: place sensor in fresh outdoor air and call with 400).
   void calibrate(uint16_t target_ppm);
 
-  // ABC (Automatic Baseline Calibration) control. The response payload of abc_query is logged so
-  // the current ABC state/period can be inspected at runtime. abc_reset turns ABC on and resets
-  // its internal state to startup (use when ABC drift is suspected).
-  void abc_query();
-  void abc_enable();
-  void abc_disable();
-  void abc_reset();
-
   void set_co2_sensor(sensor::Sensor *co2_sensor) { this->co2_sensor_ = co2_sensor; }
   void set_status_sensor(sensor::Sensor *s) { this->status_sensor_ = s; }
   void set_error_sensor(sensor::Sensor *s) { this->error_sensor_ = s; }
@@ -69,17 +57,12 @@ class T6615Component : public PollingComponent, public uart::UARTDevice {
   void send_elevation_command_();
   void send_serial_command_();
   void send_version_command_();
-  void send_abc_get_command_();
-  void send_abc_enable_command_();
-  void send_abc_disable_command_();
-  void send_abc_reset_command_();
   void send_set_sgpt_ppm_command_(uint16_t target_ppm);
   void send_sgpt_calibrate_command_();
 
   bool command_in_flight_() const;
 
   void publish_status_(uint8_t status);
-  void log_abc_state_(const char *action, uint8_t payload_len, const uint8_t *payload);
 
   T6615Command command_ = T6615Command::NONE;
   uint32_t command_time_ = 0;
@@ -101,26 +84,6 @@ template<typename... Ts> class T6615CalibrateAction : public Action<Ts...>, publ
   TEMPLATABLE_VALUE(uint16_t, target_ppm)
 
   void play(const Ts &...x) override { this->parent_->calibrate(this->target_ppm_.value(x...)); }
-};
-
-template<typename... Ts> class T6615ABCQueryAction : public Action<Ts...>, public Parented<T6615Component> {
- public:
-  void play(const Ts &...) override { this->parent_->abc_query(); }
-};
-
-template<typename... Ts> class T6615ABCEnableAction : public Action<Ts...>, public Parented<T6615Component> {
- public:
-  void play(const Ts &...) override { this->parent_->abc_enable(); }
-};
-
-template<typename... Ts> class T6615ABCDisableAction : public Action<Ts...>, public Parented<T6615Component> {
- public:
-  void play(const Ts &...) override { this->parent_->abc_disable(); }
-};
-
-template<typename... Ts> class T6615ABCResetAction : public Action<Ts...>, public Parented<T6615Component> {
- public:
-  void play(const Ts &...) override { this->parent_->abc_reset(); }
 };
 
 }  // namespace t6615

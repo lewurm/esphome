@@ -32,18 +32,6 @@ T6615Component = t6615_ns.class_("T6615Component", cg.PollingComponent, uart.UAR
 T6615CalibrateAction = t6615_ns.class_(
     "T6615CalibrateAction", automation.Action, cg.Parented.template(T6615Component)
 )
-T6615ABCQueryAction = t6615_ns.class_(
-    "T6615ABCQueryAction", automation.Action, cg.Parented.template(T6615Component)
-)
-T6615ABCEnableAction = t6615_ns.class_(
-    "T6615ABCEnableAction", automation.Action, cg.Parented.template(T6615Component)
-)
-T6615ABCDisableAction = t6615_ns.class_(
-    "T6615ABCDisableAction", automation.Action, cg.Parented.template(T6615Component)
-)
-T6615ABCResetAction = t6615_ns.class_(
-    "T6615ABCResetAction", automation.Action, cg.Parented.template(T6615Component)
-)
 
 
 def diagnostic_bit_schema():
@@ -133,36 +121,3 @@ async def t6615_calibrate_to_code(config, action_id, template_arg, args):
     target = await cg.templatable(config[CONF_VALUE], args, cg.uint16)
     cg.add(var.set_target_ppm(target))
     return var
-
-
-ABC_ACTION_SCHEMA = maybe_simple_id(
-    {
-        cv.Required(CONF_ID): cv.use_id(T6615Component),
-    }
-)
-
-
-async def _abc_action_to_code(config, action_id, template_arg, args):
-    var = cg.new_Pvariable(action_id, template_arg)
-    await cg.register_parented(var, config[CONF_ID])
-    return var
-
-
-@automation.register_action("t6615.abc_get", T6615ABCQueryAction, ABC_ACTION_SCHEMA)
-async def t6615_abc_get_to_code(config, action_id, template_arg, args):
-    return await _abc_action_to_code(config, action_id, template_arg, args)
-
-
-@automation.register_action("t6615.abc_enable", T6615ABCEnableAction, ABC_ACTION_SCHEMA)
-async def t6615_abc_enable_to_code(config, action_id, template_arg, args):
-    return await _abc_action_to_code(config, action_id, template_arg, args)
-
-
-@automation.register_action("t6615.abc_disable", T6615ABCDisableAction, ABC_ACTION_SCHEMA)
-async def t6615_abc_disable_to_code(config, action_id, template_arg, args):
-    return await _abc_action_to_code(config, action_id, template_arg, args)
-
-
-@automation.register_action("t6615.abc_reset", T6615ABCResetAction, ABC_ACTION_SCHEMA)
-async def t6615_abc_reset_to_code(config, action_id, template_arg, args):
-    return await _abc_action_to_code(config, action_id, template_arg, args)
